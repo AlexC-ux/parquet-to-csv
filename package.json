@@ -2,7 +2,8 @@
   "dependencies": {
     "fast-csv": "^5.0.5",
     "fast-glob": "^3.3.3",
-    "nodejs-polars": "^0.23.0"
+    "nodejs-polars": "^0.23.0",
+    "sqlite3": "^5.1.7"
   },
   "scripts": {
     "start": "node --max-old-space-size=65536 main.js"

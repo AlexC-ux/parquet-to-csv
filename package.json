@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "fast-csv": "^5.0.5",
+    "fast-glob": "^3.3.3",
+    "nodejs-polars": "^0.23.0"
+  },
+  "scripts": {
+    "start": "node --max-old-space-size=10240 main.js"
+  }
+}

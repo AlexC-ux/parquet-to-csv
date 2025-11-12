@@ -61,7 +61,7 @@ function chunkArray(myArray, chunkSize) {
 
 async function getRecords() {
   const convertingBar = new ProgressBar(
-    "Converting parquet files [:bar] :percent :etas\n",
+    "Converting parquet files [:bar] :percent eta: :etas\n",
     {
       total: files.length * 2,
       width: 30,
@@ -70,7 +70,7 @@ async function getRecords() {
     }
   );
 
-  async function readParquetToCsv(parquetFilePath, fileIndex) {
+  async function readParquetToCsv(parquetFilePath) {
     const dedupedRecords = new Set();
     try {
       convertingBar.tick();
@@ -91,21 +91,28 @@ async function getRecords() {
         }
         parquetRecords = resultRecords;
       } else {
-        const df = await pl.scanParquet(parquetFilePath).collect();
-        parquetRecords = df.toRecords();
-        const chunks = chunkArray(parquetRecords, 10000);
-        let chunkIndex = 0;
-        for (const chunk of chunks) {
-          const cacheChunkFileName = path.join(
-            cacheFolder,
-            `${pathHash}.${chunkIndex++}.json`
-          );
-          fs.writeFileSync(
-            cacheChunkFileName,
-            JSON.stringify(chunk, (_, value) =>
-              typeof value === "bigint" ? value.toString() : value
-            )
-          );
+        try {
+          const df = await pl.scanParquet(parquetFilePath).collect();
+          parquetRecords = df.toRecords();
+          const chunks = chunkArray(parquetRecords ?? [], 10000);
+          let chunkIndex = 0;
+          for (const chunk of chunks) {
+            const cacheChunkFileName = path.join(
+              cacheFolder,
+              `${pathHash}.${chunkIndex++}.json`
+            );
+            fs.writeFileSync(
+              cacheChunkFileName,
+              JSON.stringify(chunk, (_, value) =>
+                typeof value === "bigint" ? value.toString() : value
+              )
+            );
+          }
+        } catch (error) {
+          console.warn("Parquet data extraction error handled!");
+          console.warn(`Errored file: ${parquetFilePath}`);
+          console.error(error);
+          return [];
         }
       }
       const recordsProcessingBar = new ProgressBar(
@@ -168,11 +175,9 @@ async function getRecords() {
     }
   }
 
-  let fileIndex = 0;
-
   for (const filePath of files) {
     const resultRecords = [];
-    const records = await readParquetToCsv(filePath, fileIndex++);
+    const records = await readParquetToCsv(filePath);
     for (const record of records) {
       resultRecords.push(addNotFoundKeys(record));
     }

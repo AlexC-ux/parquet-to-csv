@@ -18,7 +18,10 @@ async function readParquetToCsv(parquetFilePath) {
     console.log(`records deduplication`);
     for (const record of parquetRecords) {
       // Отбор уникальных записей
-      dedupedRecords.add(record);
+      dedupedRecords.add({
+        duration_seconds: (record.end_time - record.start_time) / 1000000000,
+        ...record,
+      });
     }
   } catch (error) {
     console.error("Error reading Parquet from S3:", error);
@@ -32,12 +35,18 @@ for (const filePath of files) {
 
 await Promise.all(promises);
 console.log("writing result file");
+if (!fs.existsSync("output")) {
+  fs.mkdirSync("output");
+}
 const ws = fs.createWriteStream(
-  path.join(process.cwd(), 'output',`output-${Date.now()}.csv`)
+  path.join(process.cwd(), "output", `output-${Date.now()}.csv`)
 );
 
 csv
-  .write([...dedupedRecords], { headers: true })
+  .write([...dedupedRecords], {
+    headers: true,
+    delimiter: "<!-^-!>",
+  })
   .pipe(ws)
   .on("finish", () => {
     console.log("CSV file written successfully!");

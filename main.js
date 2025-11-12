@@ -21,20 +21,22 @@ async function getRecords() {
       console.log(`converting file ${parquetFilePath} to records array`);
       const parquetRecords = df.toRecords();
       console.log(`records deduplication`);
-      for (const record of parquetRecords) {
-        for (const key of Object.keys(record)) {
-          allKeys.add(key);
-        }
+      for (const recordInfo of parquetRecords) {
         // Отбор уникальных записей
         const dem = 1000000n;
         const durationMs = Number(
-          BigInt(record.end_time) / dem - BigInt(record.start_time) / dem
+          BigInt(recordInfo.end_time) / dem -
+            BigInt(recordInfo.start_time) / dem
         );
-
-        dedupedRecords.add({
+        const record = {
           duration_ms: durationMs,
-          ...record,
-        });
+          ...recordInfo,
+        };
+        for (const key of Object.keys(record)) {
+          allKeys.add(key);
+        }
+
+        dedupedRecords.add(record);
       }
     } catch (error) {
       console.error(error);
@@ -137,6 +139,7 @@ function writeRecords(makeSqlite, makeCsv) {
         const numberKeys = [
           "_timestamp",
           "duration",
+          "duration_ms",
           "end_time",
           "start_time",
           "",
@@ -154,6 +157,7 @@ ${additionalFields
             console.error("Error creating table:", err.message);
           } else {
             console.log('Table "trace" created');
+            const insertPromises = [];
             for (const record of recordsToSave) {
               const statementText = `INSERT INTO trace (span_id, ${additionalFields.join(", ")}) VALUES (?, ${additionalFields.map((v) => "?").join(", ")})`;
               const stmt = db.prepare(statementText);
@@ -170,26 +174,38 @@ ${additionalFields
               });
               const insertValues = [record.span_id, ...values];
               // Execute the INSERT statement with values
-              stmt.run(...insertValues, function (err) {
-                if (err) {
-                  console.error("Error inserting record:", err);
-                  console.log(statementText);
-                  console.log({ insertValues });
-                } else {
-                  console.log(
-                    `A row has been inserted with rowid ${this.lastID}`
-                  );
-                }
+              const promise = new Promise((res, rej) => {
+                stmt.run(...insertValues, function (err) {
+                  if (err) {
+                    console.error("Error inserting record:", err);
+                    console.log(statementText);
+                    console.log({ insertValues });
+                    rej(err);
+                  } else {
+                    if (this.lastID % 3000 == 0) {
+                      console.log(
+                        `A row has been inserted with rowid ${this.lastID}`
+                      );
+                    }
+                    res(true);
+                  }
+                });
               });
+              insertPromises.push(promise);
             }
-            console.log("closing db");
-            db.close((err) => {
-              if (err) {
-                console.error("Error closing database:", err.message);
-              } else {
-                console.log("Database connection closed.");
-              }
-            });
+            Promise.allSettled(insertPromises)
+              .then(() => {
+                console.log("inserts ok!");
+              })
+              .finally(() => {
+                db.close((err) => {
+                  if (err) {
+                    console.error("Error closing database:", err.message);
+                  } else {
+                    console.log("Database connection closed.");
+                  }
+                });
+              });
           }
         });
       }

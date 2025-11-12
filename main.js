@@ -2,7 +2,8 @@ import pl from "nodejs-polars";
 import fg from "fast-glob";
 import fs from "fs";
 import csv from "fast-csv";
-
+import path from "path";
+// Получает все файлы виды *.parquet из текущей папки проекта
 const files = fg.globSync("**/*.parquet");
 console.log(`found files count: ${files.length}`);
 
@@ -16,6 +17,7 @@ async function readParquetToCsv(parquetFilePath) {
     const parquetRecords = df.toRecords();
     console.log(`records deduplication`);
     for (const record of parquetRecords) {
+      // Отбор уникальных записей
       dedupedRecords.add(record);
     }
   } catch (error) {
@@ -29,10 +31,13 @@ for (const filePath of files) {
 }
 
 await Promise.all(promises);
+console.log("writing result file");
+const ws = fs.createWriteStream(
+  path.join(process.cwd(), `output-${Date.now()}.csv`)
+);
 
-const ws = fs.createWriteStream(Date.now());
 csv
-  .write(dedupedRecords, { headers: true })
+  .write([...dedupedRecords], { headers: true })
   .pipe(ws)
   .on("finish", () => {
     console.log("CSV file written successfully!");

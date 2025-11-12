@@ -33,7 +33,7 @@ for (const filePath of files) {
 await Promise.all(promises);
 console.log("writing result file");
 const ws = fs.createWriteStream(
-  path.join(process.cwd(), `output-${Date.now()}.csv`)
+  path.join(process.cwd(), 'output',`output-${Date.now()}.csv`)
 );
 
 csv

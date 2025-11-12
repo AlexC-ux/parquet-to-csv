@@ -18,13 +18,18 @@ async function readParquetToCsv(parquetFilePath) {
     console.log(`records deduplication`);
     for (const record of parquetRecords) {
       // Отбор уникальных записей
+      const dem = 1000000n;
+      const durationMs = Number(
+        BigInt(record.end_time) / dem - BigInt(record.start_time) / dem
+      );
+
       dedupedRecords.add({
-        duration_seconds: (record.end_time - record.start_time) / 1000000000,
+        duration_ms: durationMs,
         ...record,
       });
     }
   } catch (error) {
-    console.error("Error reading Parquet from S3:", error);
+    console.error(error);
   }
 }
 

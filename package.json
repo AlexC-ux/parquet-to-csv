@@ -4,7 +4,8 @@
     "fast-glob": "^3.3.3",
     "nodejs-polars": "^0.23.0",
     "progress": "^2.0.3",
-    "sqlite3": "^5.1.7"
+    "sqlite3": "^5.1.7",
+    "uuid": "^13.0.0"
   },
   "scripts": {
     "start": "node --max-old-space-size=65536 main.js"

@@ -6,6 +6,7 @@ import csv from "fast-csv";
 import path from "path";
 import crypto from "crypto";
 import ProgressBar from "progress";
+import { v4 as uuidv4 } from "uuid";
 
 const writecsv = false;
 const writesqlite = true;
@@ -40,6 +41,10 @@ async function generateSHA256Hash(dataToHash) {
   // Get the digest (the resulting hash) in hexadecimal format
   const sha256Hash = hash.digest("hex");
   return sha256Hash;
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function chunkArray(myArray, chunkSize) {
@@ -175,7 +180,7 @@ async function getRecords() {
   }
 
   for (const records of recordsToWrite) {
-    writeRecords(records, writesqlite, writecsv);
+    await writeRecords(records, writesqlite, writecsv);
   }
 }
 
@@ -184,7 +189,7 @@ async function getRecords() {
  * @param {boolean} writeSqlite should create sqlite output
  * @param {boolean} writeCsv should create csv output
  */
-function writeRecords(recordsToSave, writeSqlite, writeCsv) {
+async function writeRecords(recordsToSave, writeSqlite, writeCsv) {
   if (!fs.existsSync("output")) {
     fs.mkdirSync("output");
   }
@@ -236,85 +241,95 @@ function writeRecords(recordsToSave, writeSqlite, writeCsv) {
       resultDir,
       `output-${runTimestamp}.sqlite`
     );
-    const additionalFields = [...allKeys].filter((d) => d != "span_id");
     // Open a database connection (creates the file if it doesn't exist)
-    const db = new sqlite3.Database(sqliteOutputPath, (err) => {
-      if (err) {
-        console.error("Error opening database:", err.message);
-      } else {
-        console.log("Connected to the SQLite database.");
+    /**
+     * @type {sqlite3.Database}
+     */
+    const db = await new Promise((res, rej) => {
+      new sqlite3.Database(sqliteOutputPath, function (err) {
+        if (err) {
+          rej(err);
+        } else {
+          res(this);
+        }
+      });
+    });
 
-        const numberKeys = [
-          "_timestamp",
-          "duration",
-          "duration_ms",
-          "end_time",
-          "start_time",
-          "",
-        ];
-        // Create a table
-        const createCommand = `CREATE TABLE IF NOT EXISTS trace (
-span_id TEXT PRIMARY KEY,
-${additionalFields
+    const numberKeys = [
+      "_timestamp",
+      "duration",
+      "duration_ms",
+      "end_time",
+      "start_time",
+      "",
+    ];
+    // Create a table
+    const createCommand = `CREATE TABLE IF NOT EXISTS trace (
+UID TEXT PRIMARY KEY,
+${allKeys
   .map((key) => `${key} ${numberKeys.includes(key) ? "INTEGER" : "TEXT"}`)
   .join(",\r\n")}
     )`;
-        console.log({ createCommand });
-        db.run(createCommand, (err) => {
+    console.log({ createCommand });
+    await new Promise((res, rej) => {
+      db.run(createCommand, function (err) {
+        if (err) {
+          rej(err);
+        } else {
+          res(true);
+        }
+      });
+    });
+    let activeRequests = 0;
+    console.log('Table "trace" created');
+    console.log(`inserting ${recordsToSave.length} records started`);
+    for (const record of recordsToSave) {
+      const statementText = `INSERT INTO trace (uid, ${allKeys.join(", ")}) VALUES (?, ${allKeys.map((v) => "?").join(", ")})`;
+      const stmt = db.prepare(statementText);
+      const values = allKeys.map((key) => {
+        const value = record[key];
+        if (!value) {
+          return "NULL";
+        }
+        if (numberKeys.includes(key)) {
+          return Number(value);
+        } else {
+          return `${value}`;
+        }
+      });
+      const insertValues = [uuidv4(), ...values];
+      activeRequests++;
+      await new Promise((res, rej) => {
+        stmt.run(...insertValues, function (err) {
           if (err) {
-            console.error("Error creating table:", err.message);
+            rej(err);
           } else {
-            console.log('Table "trace" created');
-            const insertPromises = [];
-            console.log(`inserting ${recordsToSave.length} records started`);
-            for (const record of recordsToSave) {
-              const statementText = `INSERT INTO trace (span_id, ${additionalFields.join(", ")}) VALUES (?, ${additionalFields.map((v) => "?").join(", ")})`;
-              const stmt = db.prepare(statementText);
-              const values = additionalFields.map((key) => {
-                const value = record[key];
-                if (!value) {
-                  return "NULL";
-                }
-                if (numberKeys.includes(key)) {
-                  return Number(value);
-                } else {
-                  return `${value}`;
-                }
-              });
-              const insertValues = [record.span_id, ...values];
-              // Execute the INSERT statement with values
-              const promise = new Promise((res, rej) => {
-                stmt.run(...insertValues, function (err) {
-                  if (err) {
-                    insertSqliteBar.tick();
-                    console.error("Error inserting record:", err);
-                    console.log(statementText);
-                    console.log({ insertValues });
-                    rej(err);
-                  } else {
-                    insertSqliteBar.tick();
-                    res(true);
-                  }
-                });
-              });
-              insertPromises.push(promise);
-            }
-            Promise.allSettled(insertPromises)
-              .then(() => {
-                console.log("inserts ok!");
-              })
-              .finally(() => {
-                db.close((err) => {
-                  if (err) {
-                    console.error("Error closing database:", err.message);
-                  } else {
-                    console.log("Database connection closed.");
-                  }
-                });
-              });
+            res(true);
           }
         });
-      }
+      });
+      await new Promise((res, rej) => {
+        stmt.finalize(function (err) {
+          if (err) {
+            rej(err);
+          } else {
+            res(true);
+          }
+        });
+      });
+    }
+
+    console.log("trying to close db connection");
+    await new Promise((res, rej) => {
+      db.close(function (err) {
+        if (err) {
+          console.error("Error closing database:", err.message);
+          rej(err);
+        } else {
+          res(true);
+          console.log("Database connection closed.");
+        }
+      });
     });
   }
 }

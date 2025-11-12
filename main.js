@@ -266,7 +266,7 @@ async function writeRecords(recordsToSave, writeSqlite, writeCsv) {
     // Create a table
     const createCommand = `CREATE TABLE IF NOT EXISTS trace (
 UID TEXT PRIMARY KEY,
-${allKeys
+${[...allKeys]
   .map((key) => `${key} ${numberKeys.includes(key) ? "INTEGER" : "TEXT"}`)
   .join(",\r\n")}
     )`;
@@ -284,9 +284,9 @@ ${allKeys
     console.log('Table "trace" created');
     console.log(`inserting ${recordsToSave.length} records started`);
     for (const record of recordsToSave) {
-      const statementText = `INSERT INTO trace (uid, ${allKeys.join(", ")}) VALUES (?, ${allKeys.map((v) => "?").join(", ")})`;
+      const statementText = `INSERT INTO trace (uid, ${[...allKeys].join(", ")}) VALUES (?, ${[...allKeys].map((v) => "?").join(", ")})`;
       const stmt = db.prepare(statementText);
-      const values = allKeys.map((key) => {
+      const values = [...allKeys].map((key) => {
         const value = record[key];
         if (!value) {
           return "NULL";

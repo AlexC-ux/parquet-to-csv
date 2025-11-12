@@ -4,30 +4,56 @@ import fg from "fast-glob";
 import fs from "fs";
 import csv from "fast-csv";
 import path from "path";
+import ProgressBar from "progress";
+
 // Получает все файлы виды *.parquet из текущей папки проекта
-const files = fg.globSync("**/*.parquet");
+const files = fg.globSync("input/**/*.parquet");
 console.log(`found files count: ${files.length}`);
 
 const maxDurationMs = 2650;
+const minDurationMs = 2000;
 const allKeys = new Set();
 
 async function getRecords() {
+  const convertingBar = new ProgressBar(
+    "Converting parquet files [:bar] :percent :etas\n",
+    {
+      total: files.length * 2,
+      width: 30,
+      complete: "█",
+      incomplete: "▒",
+    }
+  );
   const dedupedRecords = new Set();
 
-  async function readParquetToCsv(parquetFilePath) {
+  async function readParquetToCsv(parquetFilePath, fileIndex) {
     try {
-      console.log(`reading ${parquetFilePath}`);
+      convertingBar.tick();
       const df = await pl.scanParquet(parquetFilePath).collect();
-      console.log(`converting file ${parquetFilePath} to records array`);
       const parquetRecords = df.toRecords();
-      console.log(`records deduplication`);
+      const recordsProcessingBar = new ProgressBar(
+        "Processing records deduplication [:bar] :percent eta: :etas\n",
+        {
+          total: parquetRecords.length * 2,
+          width: 30,
+          complete: "█",
+          incomplete: "▒",
+          renderThrottle: 300,
+        }
+      );
       for (const recordInfo of parquetRecords) {
-        // Отбор уникальных записей
+        recordsProcessingBar.tick();
         const dem = 1000000n;
         const durationMs = Number(
           BigInt(recordInfo.end_time) / dem -
             BigInt(recordInfo.start_time) / dem
         );
+
+        if (minDurationMs > durationMs) {
+          recordsProcessingBar.tick();
+          continue;
+        }
+
         const record = {
           duration_ms: durationMs,
           ...recordInfo,
@@ -37,10 +63,12 @@ async function getRecords() {
         }
 
         dedupedRecords.add(record);
+        recordsProcessingBar.tick();
       }
     } catch (error) {
       console.error(error);
     }
+    convertingBar.tick();
   }
 
   function addNotFoundKeys(obj) {
@@ -62,12 +90,10 @@ async function getRecords() {
     }
   }
 
-  const promises = [];
+  let fileIndex = 0;
   for (const filePath of files) {
-    promises.push(readParquetToCsv(filePath));
+    await readParquetToCsv(filePath, fileIndex++);
   }
-
-  await Promise.all(promises);
 
   const resultRecords = [];
 
@@ -123,6 +149,17 @@ function writeRecords(makeSqlite, makeCsv) {
       });
   }
   if (makeSqlite) {
+    const insertSqliteBar = new ProgressBar(
+      "Sqlite inserting records [:bar] :percent eta: :etas\n",
+      {
+        total: recordsToSave * 2 + 2,
+        width: 30,
+        complete: "█",
+        incomplete: "▒",
+        renderThrottle: 1000,
+      }
+    );
+    insertSqliteBar.tick();
     const sqliteOutputPath = path.join(
       process.cwd(),
       "output",
@@ -156,6 +193,7 @@ ${additionalFields
           if (err) {
             console.error("Error creating table:", err.message);
           } else {
+            insertSqliteBar.tick();
             console.log('Table "trace" created');
             const insertPromises = [];
             for (const record of recordsToSave) {
@@ -177,16 +215,13 @@ ${additionalFields
               const promise = new Promise((res, rej) => {
                 stmt.run(...insertValues, function (err) {
                   if (err) {
+                    insertSqliteBar.tick();
                     console.error("Error inserting record:", err);
                     console.log(statementText);
                     console.log({ insertValues });
                     rej(err);
                   } else {
-                    if (this.lastID % 3000 == 0) {
-                      console.log(
-                        `A row has been inserted with rowid ${this.lastID}`
-                      );
-                    }
+                    insertSqliteBar.tick();
                     res(true);
                   }
                 });

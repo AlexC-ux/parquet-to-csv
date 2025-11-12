@@ -7,38 +7,76 @@ import path from "path";
 const files = fg.globSync("**/*.parquet");
 console.log(`found files count: ${files.length}`);
 
-const dedupedRecords = new Set();
+const maxDurationMs = 2650;
 
-async function readParquetToCsv(parquetFilePath) {
-  try {
-    console.log(`reading ${parquetFilePath}`);
-    const df = await pl.scanParquet(parquetFilePath).collect();
-    console.log(`converting file ${parquetFilePath} to records array`);
-    const parquetRecords = df.toRecords();
-    console.log(`records deduplication`);
-    for (const record of parquetRecords) {
-      // Отбор уникальных записей
-      const dem = 1000000n;
-      const durationMs = Number(
-        BigInt(record.end_time) / dem - BigInt(record.start_time) / dem
-      );
+async function getRecords() {
+  const dedupedRecords = new Set();
+  const allKeys = new Set();
 
-      dedupedRecords.add({
-        duration_ms: durationMs,
-        ...record,
-      });
+  async function readParquetToCsv(parquetFilePath) {
+    try {
+      console.log(`reading ${parquetFilePath}`);
+      const df = await pl.scanParquet(parquetFilePath).collect();
+      console.log(`converting file ${parquetFilePath} to records array`);
+      const parquetRecords = df.toRecords();
+      console.log(`records deduplication`);
+      for (const record of parquetRecords) {
+        for (const key of Object.keys(record)) {
+          allKeys.add(key);
+        }
+        // Отбор уникальных записей
+        const dem = 1000000n;
+        const durationMs = Number(
+          BigInt(record.end_time) / dem - BigInt(record.start_time) / dem
+        );
+
+        dedupedRecords.add({
+          duration_ms: durationMs,
+          ...record,
+        });
+      }
+    } catch (error) {
+      console.error(error);
     }
-  } catch (error) {
-    console.error(error);
   }
+
+  function addNotFoundKeys(obj) {
+    const objKeys = Object.keys(obj);
+    if (objKeys.length == allKeys.length) {
+      return obj;
+    } else {
+      const notFoundKeys = [];
+      for (const key of allKeys) {
+        if (!objKeys.includes(key)) {
+          notFoundKeys.push(key);
+        }
+      }
+      const newObj = { ...obj };
+      for (const notFoundKey of notFoundKeys) {
+        newObj[notFoundKey] = null;
+      }
+      return newObj;
+    }
+  }
+
+  const promises = [];
+  for (const filePath of files) {
+    promises.push(readParquetToCsv(filePath));
+  }
+
+  await Promise.all(promises);
+
+  const resultRecords = [];
+
+  for (const record of dedupedRecords) {
+    resultRecords.push(addNotFoundKeys(record));
+  }
+
+  return resultRecords;
 }
 
-const promises = [];
-for (const filePath of files) {
-  promises.push(readParquetToCsv(filePath));
-}
+const recordsToSave = await getRecords();
 
-await Promise.all(promises);
 console.log("writing result file");
 if (!fs.existsSync("output")) {
   fs.mkdirSync("output");
@@ -47,12 +85,28 @@ const ws = fs.createWriteStream(
   path.join(process.cwd(), "output", `output-${Date.now()}.csv`)
 );
 
+const wsLong = fs.createWriteStream(
+  path.join(process.cwd(), "output", `output-${Date.now()}.csv`)
+);
+
 csv
-  .write([...dedupedRecords], {
+  .write(recordsToSave, {
     headers: true,
-    delimiter: "<!-^-!>",
   })
   .pipe(ws)
   .on("finish", () => {
-    console.log("CSV file written successfully!");
+    console.log("CSV main file written successfully!");
+  });
+
+console.log("writing long queries");
+csv
+  .write(
+    recordsToSave.filter((d) => d.duration_ms >= maxDurationMs),
+    {
+      headers: true,
+    }
+  )
+  .pipe(wsLong)
+  .on("finish", () => {
+    console.log("CSV long file written successfully!");
   });

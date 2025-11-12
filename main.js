@@ -4,15 +4,55 @@ import fg from "fast-glob";
 import fs from "fs";
 import csv from "fast-csv";
 import path from "path";
+import crypto from "crypto";
 import ProgressBar from "progress";
 
+const writecsv = false;
+const writesqlite = true;
+
+const cacheFolder = path.join(process.cwd(), ".cache");
+if (!fs.existsSync(cacheFolder)) {
+  fs.mkdirSync(cacheFolder, { recursive: true });
+}
 // Получает все файлы виды *.parquet из текущей папки проекта
 const files = fg.globSync("input/**/*.parquet");
 console.log(`found files count: ${files.length}`);
 
+const runTimestamp = Date.now();
+const resultDir = path.join(process.cwd(), "output", `${runTimestamp}`);
+if (!fs.existsSync(resultDir)) {
+  fs.mkdirSync(resultDir, { recursive: true });
+}
+
 const maxDurationMs = 2650;
 const minDurationMs = 2000;
 const allKeys = new Set();
+
+const recordsToWrite = [];
+
+async function generateSHA256Hash(dataToHash) {
+  // Create a SHA-256 hash object
+  const hash = crypto.createHash("sha256");
+
+  // Update the hash object with the data
+  hash.update(dataToHash);
+
+  // Get the digest (the resulting hash) in hexadecimal format
+  const sha256Hash = hash.digest("hex");
+  return sha256Hash;
+}
+
+function chunkArray(myArray, chunkSize) {
+  const results = [];
+  let index = 0;
+
+  while (index < myArray.length) {
+    results.push(myArray.slice(index, index + chunkSize));
+    index += chunkSize;
+  }
+
+  return results;
+}
 
 async function getRecords() {
   const convertingBar = new ProgressBar(
@@ -24,13 +64,45 @@ async function getRecords() {
       incomplete: "▒",
     }
   );
-  const dedupedRecords = new Set();
 
   async function readParquetToCsv(parquetFilePath, fileIndex) {
+    const dedupedRecords = new Set();
     try {
       convertingBar.tick();
-      const df = await pl.scanParquet(parquetFilePath).collect();
-      const parquetRecords = df.toRecords();
+      const pathHash = path.parse(parquetFilePath).name;
+      const cacheGlob = `${pathHash}.*.json`;
+      const cacheChunks = fg.globSync(cacheGlob, {
+        cwd: cacheFolder,
+      });
+      const cacheExists = cacheChunks.length > 0;
+      let parquetRecords;
+      if (cacheExists) {
+        let resultRecords = [];
+        for (const chunkFile of cacheChunks) {
+          const chunkContent = JSON.parse(
+            fs.readFileSync(path.join(cacheFolder, chunkFile))
+          );
+          resultRecords.push(...chunkContent);
+        }
+        parquetRecords = resultRecords;
+      } else {
+        const df = await pl.scanParquet(parquetFilePath).collect();
+        parquetRecords = df.toRecords();
+        const chunks = chunkArray(parquetRecords, 10000);
+        let chunkIndex = 0;
+        for (const chunk of chunks) {
+          const cacheChunkFileName = path.join(
+            cacheFolder,
+            `${pathHash}.${chunkIndex++}.json`
+          );
+          fs.writeFileSync(
+            cacheChunkFileName,
+            JSON.stringify(chunk, (_, value) =>
+              typeof value === "bigint" ? value.toString() : value
+            )
+          );
+        }
+      }
       const recordsProcessingBar = new ProgressBar(
         "Processing records deduplication [:bar] :percent eta: :etas\n",
         {
@@ -69,6 +141,7 @@ async function getRecords() {
       console.error(error);
     }
     convertingBar.tick();
+    return dedupedRecords;
   }
 
   function addNotFoundKeys(obj) {
@@ -91,39 +164,38 @@ async function getRecords() {
   }
 
   let fileIndex = 0;
+
   for (const filePath of files) {
-    await readParquetToCsv(filePath, fileIndex++);
+    const resultRecords = [];
+    const records = await readParquetToCsv(filePath, fileIndex++);
+    for (const record of records) {
+      resultRecords.push(addNotFoundKeys(record));
+    }
+    recordsToWrite.push(resultRecords);
   }
 
-  const resultRecords = [];
-
-  for (const record of dedupedRecords) {
-    resultRecords.push(addNotFoundKeys(record));
+  for (const records of recordsToWrite) {
+    writeRecords(records, writesqlite, writecsv);
   }
-
-  return resultRecords;
 }
-
-const recordsToSave = await getRecords();
-const endTimestamp = Date.now();
 
 /**
  *
- * @param {boolean} makeSqlite should create sqlite output
- * @param {boolean} makeCsv should create csv output
+ * @param {boolean} writeSqlite should create sqlite output
+ * @param {boolean} writeCsv should create csv output
  */
-function writeRecords(makeSqlite, makeCsv) {
+function writeRecords(recordsToSave, writeSqlite, writeCsv) {
   if (!fs.existsSync("output")) {
     fs.mkdirSync("output");
   }
-  if (makeCsv) {
+  if (writeCsv) {
     console.log("writing result file");
     const ws = fs.createWriteStream(
-      path.join(process.cwd(), "output", `output-${endTimestamp}.csv`)
+      path.join(resultDir, `output-${runTimestamp}.${writeTimestamp}.$.csv`)
     );
 
     const wsLong = fs.createWriteStream(
-      path.join(process.cwd(), "output", `output-${endTimestamp}.csv`)
+      path.join(resultDir, `output-${runTimestamp}.${writeTimestamp}.csv`)
     );
 
     csv
@@ -148,11 +220,11 @@ function writeRecords(makeSqlite, makeCsv) {
         console.log("CSV long file written successfully!");
       });
   }
-  if (makeSqlite) {
+  if (writeSqlite) {
     const insertSqliteBar = new ProgressBar(
       "Sqlite inserting records [:bar] :percent eta: :etas\n",
       {
-        total: recordsToSave * 2 + 2,
+        total: recordsToSave.length + 2,
         width: 30,
         complete: "█",
         incomplete: "▒",
@@ -161,9 +233,8 @@ function writeRecords(makeSqlite, makeCsv) {
     );
     insertSqliteBar.tick();
     const sqliteOutputPath = path.join(
-      process.cwd(),
-      "output",
-      `output-${endTimestamp}.sqlite`
+      resultDir,
+      `output-${runTimestamp}.sqlite`
     );
     const additionalFields = [...allKeys].filter((d) => d != "span_id");
     // Open a database connection (creates the file if it doesn't exist)
@@ -182,7 +253,7 @@ function writeRecords(makeSqlite, makeCsv) {
           "",
         ];
         // Create a table
-        const createCommand = `CREATE TABLE trace (
+        const createCommand = `CREATE TABLE IF NOT EXISTS trace (
 span_id TEXT PRIMARY KEY,
 ${additionalFields
   .map((key) => `${key} ${numberKeys.includes(key) ? "INTEGER" : "TEXT"}`)
@@ -193,9 +264,9 @@ ${additionalFields
           if (err) {
             console.error("Error creating table:", err.message);
           } else {
-            insertSqliteBar.tick();
             console.log('Table "trace" created');
             const insertPromises = [];
+            console.log(`inserting ${recordsToSave.length} records started`);
             for (const record of recordsToSave) {
               const statementText = `INSERT INTO trace (span_id, ${additionalFields.join(", ")}) VALUES (?, ${additionalFields.map((v) => "?").join(", ")})`;
               const stmt = db.prepare(statementText);
@@ -248,4 +319,4 @@ ${additionalFields
   }
 }
 
-writeRecords(true, false);
+await getRecords();

@@ -7,6 +7,6 @@
 ## Как запустить
 
 ```js
-npm i
+npm ci
 npm run start
 ```

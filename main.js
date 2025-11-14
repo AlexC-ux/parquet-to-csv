@@ -7,9 +7,18 @@ import path from "path";
 import crypto from "crypto";
 import ProgressBar from "progress";
 import { v4 as uuidv4 } from "uuid";
+import * as dotenv from "dotenv";
+dotenv.config();
 
-const writecsv = false;
-const writesqlite = true;
+const writecsv = !!parseInt(process.env.WRITE_CSV ?? "0");
+const writesqlite = !!parseInt(process.env.WRITE_SQLITE ?? "0");
+
+if (!writecsv && !writesqlite) {
+  throw "Не выбрано ни одного типа данных для вывода, проверьте readme и .env";
+}
+
+console.log(`Вывод в csv ${writecsv ? "✅" : "❌"}`);
+console.log(`Вывод в sql ${writesqlite ? "✅" : "❌"}`);
 
 const cacheFolder = path.join(process.cwd(), ".cache");
 if (!fs.existsSync(cacheFolder)) {

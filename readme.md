@@ -12,7 +12,7 @@
 
 ### Генерация
 
-Установите на компьютер `nodejs` [Node.Js v22.14.0](https://nodejs.org/en/download)
+Установите на компьютер `nodejs` [Node.JS v22.14.0](https://nodejs.org/en/download)
 
 Выполните `npm ci`
 

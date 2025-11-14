@@ -17,8 +17,8 @@ if (!writecsv && !writesqlite) {
   throw "Не выбрано ни одного типа данных для вывода, проверьте readme и .env";
 }
 
-console.log(`Вывод в csv ${writecsv ? "✅" : "❌"}`);
-console.log(`Вывод в sql ${writesqlite ? "✅" : "❌"}`);
+console.log(`${writecsv ? "✅" : "❌"} Вывод в csv `);
+console.log(`${writesqlite ? "✅" : "❌"} Вывод в sqlite`);
 
 const cacheFolder = path.join(process.cwd(), ".cache");
 if (!fs.existsSync(cacheFolder)) {
@@ -26,7 +26,7 @@ if (!fs.existsSync(cacheFolder)) {
 }
 // Получает все файлы виды *.parquet из текущей папки проекта
 const files = fg.globSync("input/**/*.parquet");
-console.log(`found files count: ${files.length}`);
+console.log(`found input files count: ${files.length}`);
 
 const runTimestamp = Date.now();
 const resultDir = path.join(process.cwd(), "output", `${runTimestamp}`);

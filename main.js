@@ -8,6 +8,7 @@ import ProgressBar from "progress";
 import { v4 as uuidv4 } from "uuid";
 import * as dotenv from "dotenv";
 import { addNotFoundKeys, allKeys } from "./src/notFoundKeys.js";
+import { deleteEmptyFilesInDirectory } from "./src/deleteEmptyFiles.js";
 dotenv.config();
 
 const writecsv = !!parseInt(process.env.WRITE_CSV ?? "0");
@@ -23,11 +24,15 @@ console.log(`${writesqlite ? "✅" : "❌"} Вывод в sqlite`);
 const rawCacheFolder = path.join(process.cwd(), ".raw.cache");
 if (!fs.existsSync(rawCacheFolder)) {
   fs.mkdirSync(rawCacheFolder, { recursive: true });
+} else {
+  await deleteEmptyFilesInDirectory(rawCacheFolder);
 }
 
 const formatedCacheFolder = path.join(process.cwd(), ".formated.cache");
 if (!fs.existsSync(formatedCacheFolder)) {
   fs.mkdirSync(formatedCacheFolder, { recursive: true });
+} else {
+  await deleteEmptyFilesInDirectory(formatedCacheFolder);
 }
 
 // Получает все файлы виды *.parquet из текущей папки проекта
@@ -88,7 +93,9 @@ async function getRecords() {
           let resultRecords = [];
           for (const chunkFile of cacheChunks) {
             const chunkContent = JSON.parse(
-              fs.readFileSync(path.join(rawCacheFolder, chunkFile))
+              fs.readFileSync(path.join(rawCacheFolder, chunkFile), {
+                encoding: "utf8",
+              })
             );
             resultRecords.push(...chunkContent);
           }
@@ -133,7 +140,9 @@ async function getRecords() {
       if (formatedCacheExists) {
         for (const chunkFile of formatedCacheChunks) {
           const chunkContent = JSON.parse(
-            fs.readFileSync(path.join(formatedCacheFolder, chunkFile))
+            fs.readFileSync(path.join(formatedCacheFolder, chunkFile), {
+              encoding: "utf8",
+            })
           );
           dedupedRecords.add(...chunkContent);
         }

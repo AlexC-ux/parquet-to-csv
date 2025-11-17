@@ -4,10 +4,10 @@ import fg from "fast-glob";
 import fs from "fs";
 import csv from "fast-csv";
 import path from "path";
-import crypto from "crypto";
 import ProgressBar from "progress";
 import { v4 as uuidv4 } from "uuid";
 import * as dotenv from "dotenv";
+import { addNotFoundKeys, allKeys } from "./src/notFoundKeys.js";
 dotenv.config();
 
 const writecsv = !!parseInt(process.env.WRITE_CSV ?? "0");
@@ -20,10 +20,16 @@ if (!writecsv && !writesqlite) {
 console.log(`${writecsv ? "✅" : "❌"} Вывод в csv `);
 console.log(`${writesqlite ? "✅" : "❌"} Вывод в sqlite`);
 
-const cacheFolder = path.join(process.cwd(), ".cache");
-if (!fs.existsSync(cacheFolder)) {
-  fs.mkdirSync(cacheFolder, { recursive: true });
+const rawCacheFolder = path.join(process.cwd(), ".raw.cache");
+if (!fs.existsSync(rawCacheFolder)) {
+  fs.mkdirSync(rawCacheFolder, { recursive: true });
 }
+
+const formatedCacheFolder = path.join(process.cwd(), ".formated.cache");
+if (!fs.existsSync(formatedCacheFolder)) {
+  fs.mkdirSync(formatedCacheFolder, { recursive: true });
+}
+
 // Получает все файлы виды *.parquet из текущей папки проекта
 const files = fg.globSync("input/**/*.parquet");
 console.log(`found input files count: ${files.length}`);
@@ -36,25 +42,8 @@ if (!fs.existsSync(resultDir)) {
 
 const maxDurationMs = 2650;
 const minDurationMs = 2000;
-const allKeys = new Set();
 
 const recordsToWrite = [];
-
-async function generateSHA256Hash(dataToHash) {
-  // Create a SHA-256 hash object
-  const hash = crypto.createHash("sha256");
-
-  // Update the hash object with the data
-  hash.update(dataToHash);
-
-  // Get the digest (the resulting hash) in hexadecimal format
-  const sha256Hash = hash.digest("hex");
-  return sha256Hash;
-}
-
-async function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function chunkArray(myArray, chunkSize) {
   const results = [];
@@ -86,19 +75,25 @@ async function getRecords() {
       const pathHash = path.parse(parquetFilePath).name;
       const cacheGlob = `${pathHash}.*.json`;
       const cacheChunks = fg.globSync(cacheGlob, {
-        cwd: cacheFolder,
+        cwd: rawCacheFolder,
       });
+      const formatedCacheChunks = fg.globSync(cacheGlob, {
+        cwd: formatedCacheFolder,
+      });
+      const formatedCacheExists = formatedCacheChunks.length > 0;
       const cacheExists = cacheChunks.length > 0;
-      let parquetRecords;
+      let parquetRecords = [];
       if (cacheExists) {
-        let resultRecords = [];
-        for (const chunkFile of cacheChunks) {
-          const chunkContent = JSON.parse(
-            fs.readFileSync(path.join(cacheFolder, chunkFile))
-          );
-          resultRecords.push(...chunkContent);
+        if (!formatedCacheExists) {
+          let resultRecords = [];
+          for (const chunkFile of cacheChunks) {
+            const chunkContent = JSON.parse(
+              fs.readFileSync(path.join(rawCacheFolder, chunkFile))
+            );
+            resultRecords.push(...chunkContent);
+          }
+          parquetRecords = resultRecords;
         }
-        parquetRecords = resultRecords;
       } else {
         try {
           const df = await pl.scanParquet(parquetFilePath).collect();
@@ -107,7 +102,7 @@ async function getRecords() {
           let chunkIndex = 0;
           for (const chunk of chunks) {
             const cacheChunkFileName = path.join(
-              cacheFolder,
+              rawCacheFolder,
               `${pathHash}.${chunkIndex++}.json`
             );
             fs.writeFileSync(
@@ -134,54 +129,60 @@ async function getRecords() {
           renderThrottle: 300,
         }
       );
-      for (const recordInfo of parquetRecords) {
-        recordsProcessingBar.tick();
-        const dem = 1000000n;
-        const durationMs = Number(
-          BigInt(recordInfo.end_time) / dem -
-            BigInt(recordInfo.start_time) / dem
-        );
 
-        if (minDurationMs > durationMs) {
+      if (formatedCacheExists) {
+        for (const chunkFile of formatedCacheChunks) {
+          const chunkContent = JSON.parse(
+            fs.readFileSync(path.join(formatedCacheFolder, chunkFile))
+          );
+          dedupedRecords.add(...chunkContent);
+        }
+        recordsProcessingBar.terminate();
+      } else {
+        for (const recordInfo of parquetRecords) {
           recordsProcessingBar.tick();
-          continue;
-        }
+          const dem = 1000000n;
+          const durationMs = Number(
+            BigInt(recordInfo.end_time) / dem -
+              BigInt(recordInfo.start_time) / dem
+          );
 
-        const record = {
-          duration_ms: durationMs,
-          ...recordInfo,
-        };
-        for (const key of Object.keys(record)) {
-          allKeys.add(key);
-        }
+          if (minDurationMs > durationMs) {
+            recordsProcessingBar.tick();
+            continue;
+          }
 
-        dedupedRecords.add(record);
-        recordsProcessingBar.tick();
+          const record = {
+            duration_ms: durationMs,
+            ...recordInfo,
+          };
+          for (const key of Object.keys(record)) {
+            allKeys.add(key);
+          }
+
+          dedupedRecords.add(record);
+          recordsProcessingBar.tick();
+        }
+        const chunks = chunkArray([...(dedupedRecords ?? [])], 10000);
+        let chunkIndex = 0;
+        for (const chunk of chunks) {
+          const cacheChunkFileName = path.join(
+            formatedCacheFolder,
+            `${pathHash}.${chunkIndex++}.json`
+          );
+          fs.writeFileSync(
+            cacheChunkFileName,
+            JSON.stringify(chunk, (_, value) =>
+              typeof value === "bigint" ? value.toString() : value
+            )
+          );
+        }
       }
     } catch (error) {
       console.error(error);
     }
     convertingBar.tick();
     return dedupedRecords;
-  }
-
-  function addNotFoundKeys(obj) {
-    const objKeys = Object.keys(obj);
-    if (objKeys.length == allKeys.length) {
-      return obj;
-    } else {
-      const notFoundKeys = [];
-      for (const key of allKeys) {
-        if (!objKeys.includes(key)) {
-          notFoundKeys.push(key);
-        }
-      }
-      const newObj = { ...obj };
-      for (const notFoundKey of notFoundKeys) {
-        newObj[notFoundKey] = null;
-      }
-      return newObj;
-    }
   }
 
   for (const filePath of files) {
@@ -297,7 +298,20 @@ ${[...allKeys]
     let activeRequests = 0;
     console.log('Table "trace" created');
     console.log(`inserting ${recordsToSave.length} records started`);
+    let recordIndex = 0;
     for (const record of recordsToSave) {
+      if (recordIndex % 1000 == 0) {
+        console.log("running vacuum");
+        await new Promise((res, rej) => {
+          db.exec("VACUUM", (err) => {
+            if (err) {
+              rej(err);
+            } else {
+              res(true);
+            }
+          });
+        });
+      }
       const statementText = `INSERT INTO trace (uid, ${[...allKeys].join(", ")}) VALUES (?, ${[...allKeys].map((v) => "?").join(", ")})`;
       const stmt = db.prepare(statementText);
       const values = [...allKeys].map((key) => {
@@ -331,6 +345,7 @@ ${[...allKeys]
           }
         });
       });
+      recordIndex++;
     }
 
     console.log("trying to close db connection");

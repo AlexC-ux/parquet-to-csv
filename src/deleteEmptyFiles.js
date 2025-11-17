@@ -1,16 +1,17 @@
 import fs from "fs";
+import path from "path";
 
-export async function deleteEmptyFilesInDirectory(directoryPath) {
+export function deleteEmptyFilesInDirectory(directoryPath) {
   try {
-    const files = await fs.readdir(directoryPath);
+    const files = fs.readdirSync(directoryPath);
 
     for (const file of files) {
       const filePath = path.join(directoryPath, file);
-      const stats = await fs.stat(filePath);
+      const stats = fs.statSync(filePath);
 
       // Check if it's a file and its size is 0 bytes
       if (stats.isFile() && stats.size === 0) {
-        await fs.unlink(filePath);
+        fs.unlinkSync(filePath);
         console.log(`Deleted empty file: ${filePath}`);
       }
     }

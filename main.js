@@ -25,14 +25,14 @@ const rawCacheFolder = path.join(process.cwd(), ".raw.cache");
 if (!fs.existsSync(rawCacheFolder)) {
   fs.mkdirSync(rawCacheFolder, { recursive: true });
 } else {
-  await deleteEmptyFilesInDirectory(rawCacheFolder);
+  deleteEmptyFilesInDirectory(rawCacheFolder);
 }
 
 const formatedCacheFolder = path.join(process.cwd(), ".formated.cache");
 if (!fs.existsSync(formatedCacheFolder)) {
   fs.mkdirSync(formatedCacheFolder, { recursive: true });
 } else {
-  await deleteEmptyFilesInDirectory(formatedCacheFolder);
+  deleteEmptyFilesInDirectory(formatedCacheFolder);
 }
 
 // Получает все файлы виды *.parquet из текущей папки проекта

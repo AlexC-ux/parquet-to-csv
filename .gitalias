@@ -1,0 +1,23 @@
+# Как начать использовать эти алиасы?
+# Просто введи в консоль из папки репозитория
+# git config --local include.path "../.gitalias"
+
+[alias]
+    # удаление смерженых локальных веток
+    cleanup = "!git branch --merged | grep -Ev '(^\\*|master|main|develop|rea|dev)' | xargs git branch -d && echo -e 'Merged Branches cleaned 🥅⚽🏃‍♂️'"
+    # переводит последний коммит в стейдж
+    undo = reset --soft HEAD~1
+    # переключается на предпоследний коммит
+    redo = reset --hard HEAD@{1}
+    # выводит дерево коммитов
+    tree = log --pretty=format:\"%h %ad | %s%d [%an]\" --decorate --graph --date=short
+    # последний комит
+    last = log -1 HEAD --stat
+    # гит лог в 1 строку на каждый коммит
+    logs = log --pretty=format:"%C(yellow)%h\\ %ad%Cred%d\\ %Creset%s%Cblue\\ [%cn]" --decorate --date=short
+    # вывод гитконфиг переменных
+    info = config --global -l
+    # вывод всех алиасов
+    la = "!git config -l | grep alias | cut -c 7-"
+    # Заменяет изменения последнего комита в origin текущими
+    amend = "!git commit --amend --all --no-edit && git push --force-with-lease"

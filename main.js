@@ -144,6 +144,11 @@ async function getRecords() {
               encoding: "utf8",
             })
           );
+          for (const record of chunkContent) {
+            for (const key of Object.keys(record)) {
+              allKeys.add(key);
+            }
+          }
           dedupedRecords.add(...chunkContent);
         }
         recordsProcessingBar.terminate();
